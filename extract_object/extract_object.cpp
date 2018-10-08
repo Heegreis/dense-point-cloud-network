@@ -1,9 +1,17 @@
 #include <pcl/io/pcd_io.h>
-#include<pcl/PCLPointCloud2.h>
-#include<iostream>
-#include<string>
+#include <pcl/PCLPointCloud2.h>
 #include <pcl/filters/crop_box.h>
 #include "tracklets.h"
+
+
+#include <string>
+#include <stdio.h>
+#include <iostream>
+#include <stdlib.h>
+#include <string.h>
+#include <dirent.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 
 using namespace pcl;
 using namespace pcl::io;
@@ -12,69 +20,140 @@ using namespace std;
 typedef pcl::PointXYZI PointT;
 typedef pcl::PointCloud<PointT> PointCloudT;
 
+int get_file_count(char *dirname)
+{
+	DIR *dir;
+	struct dirent *ptr;
+	int total_count = 0;
+	char path[PATH_MAX] = {0};
+	dir = opendir(dirname);
+	if (dir == NULL)
+	{
+		printf("%s: open dir: %s failed.\n", __func__, path);
+		exit(1);
+	}
+	while ((ptr = readdir(dir)) != NULL)
+	{
+		if (strcmp(ptr->d_name, ".") == 0 || strcmp(ptr->d_name, "..") == 0)
+			continue;
+		snprintf(path, (size_t)PATH_MAX, "%s/%s", dirname, ptr->d_name);
+		if (ptr->d_type == DT_DIR)
+		{
+			total_count++;
+			//printf("%s: Entering into dir: %s.\n", __func__,path);
+			//printf("%s: Is dir, and count++, count: %ld\n", __func__, total_count);
+			total_count += get_file_count(path);
+			memset(path, 0, sizeof(path));
+		}
+		else
+
+		{
+			//printf("%s: count: %ld, file: %s.\n", __func__,total_count,path);
+			total_count++;
+		}
+	}
+	closedir(dir);
+	//printf("%s: statistics total files count :%ld.\n", __func__,total_count);
+	return total_count;
+}
+
 int main()
 {
-	PointCloudT::Ptr cloud_in(new PointCloudT);  // Original point cloud
-	PointCloudT::Ptr cloud_out(new PointCloudT);  // Out
-	pcl::io::loadPCDFile("0000000000.pcd", *cloud_in);
-	std::cout << "\nLoad cloud_in success\n" << std::endl;
-	
+	string base_dir = "/data/dataset/kitti/raw_data/City0005";
+	string data_date = "2011_09_26";
+	string data_num = "0005";
+	string sync_dir = data_date + "_drive_" + data_num + "_sync";
+	string pcd_dir = base_dir + "/" + data_date + "_drive_" + data_num + "_pcd";
+	string tracklets_dir = base_dir + "/" + data_date + "_drive_" + data_num + "_tracklets/" + data_date + "/" + sync_dir;
+
+	//creat the save dir
+	std::string save_dir = base_dir + "/" + data_date + "_drive_" + data_num + "_pcd_object";
+	char *save_dir_char = (char*)save_dir.c_str();
+	if(access(save_dir_char, 0) != 0)
+		int result = mkdir(save_dir_char, S_IRWXU|S_IRWXG|S_IRWXO);
+	else
+		std::cout << "the dir for save pcd file is existed." << std::endl;
+
+	//build tracklets data
 	Tracklets *tracklets = new Tracklets();
-	if (!tracklets->loadFromFile("tracklet_labels.xml"))
+	if (!tracklets->loadFromFile(tracklets_dir + "/tracklet_labels.xml"))
 		std::cerr << "load trackletFiles error" << std::endl;
 	else
 		std::cerr << "load trackletFiles sucess" << std::endl;
-	int nTrack = tracklets->numberOfTracklets();
-	std::cerr << nTrack << std::endl;
-
+	int nTracklet = tracklets->numberOfTracklets();
 	vector<Tracklets::tTracklet*> trackletsVec;
-	
-	for(int i = 0; i < nTrack; i++)
+	for(int i = 0; i < nTracklet; i++)
 	{
 		Tracklets::tTracklet *tracklet;
 		tracklet = tracklets->getTracklet(i);
 		trackletsVec.push_back(tracklet);
 	}
-	std::cerr << trackletsVec[1]->h << std::endl;
-	std::cerr << trackletsVec[1]->poses[1].tx << std::endl;
 
-	delete tracklets;
-
-	float h = 1.4778554;
-	float w = 1.8019032;
-	float l = 4.5137277;
-
-	double tx = 7.2628571625253793;
-	double ty = 3.8923224413722752;
-	double tz = -1.7135605745017528;
-
-	double rx = 0;
-	double ry = 0;
-	double rz = -3.1269888029050974;
-
-	double minX = 0 - (l / 2);
-	double minY = 0 - (w / 2);
-	double minZ = 0;
-
-	double maxX = (l / 2);
-	double maxY = (w / 2);
-	double maxZ = h;
-
-	pcl::CropBox<PointT> filter;
-	filter.setInputCloud(cloud_in);
-	filter.setMin(Eigen::Vector4f((float)minX, (float)minY, (float)minZ, 1.0));
-	filter.setMax(Eigen::Vector4f((float)maxX, (float)maxY, (float)maxZ, 1.0));
-	filter.setRotation(Eigen::Vector3f((float)rx, (float)ry, (float)rz));//rotation
-	filter.setTranslation(Eigen::Vector3f((float)tx, (float)ty, (float)tz));
+	//count the number of files
+	char *pcd_dir_char = (char*)pcd_dir.c_str();
+	int total_frame = 0;
+	total_frame = get_file_count(pcd_dir_char);
 	
-	filter.filter(*cloud_out);
+	for(int frame = 0; frame < total_frame; frame++)
+	{
+		char filenum_str[14];
+		sprintf(filenum_str, "%010d", frame);
+		std::string pcd_filename = filenum_str + std::string(".pcd");
 
-	PointCloudT cloud_B;
-	cloud_B.points = cloud_out.get()->points;
-	cloud_B.height = cloud_out.get()->height;
-	cloud_B.width = cloud_out.get()->width;
+		//new in & out point cloud object and load cloud_in data
+		PointCloudT::Ptr cloud_in(new PointCloudT);  // Original point cloud
+		if(pcl::io::loadPCDFile(pcd_dir + "/" + pcd_filename, *cloud_in) != 0)
+			std::cout << "\nLoad cloud_in error\n" << std::endl;
 
-	pcl::io::savePCDFileASCII("0000000000filted10A.pcd", cloud_B);
+		for(int tracklet_id = 0; tracklet_id < nTracklet; tracklet_id++)
+		{
+			if (frame >= trackletsVec[tracklet_id]->first_frame && frame <= trackletsVec[tracklet_id]->lastFrame()) {
+				int first_frame = trackletsVec[tracklet_id]->first_frame;
+				int poses_frame = frame - first_frame;
+				
+				float h = trackletsVec[tracklet_id]->h;
+				float w = trackletsVec[tracklet_id]->w;
+				float l = trackletsVec[tracklet_id]->l;
 
+				double tx = trackletsVec[tracklet_id]->poses[poses_frame].tx;
+				double ty = trackletsVec[tracklet_id]->poses[poses_frame].ty;
+				double tz = trackletsVec[tracklet_id]->poses[poses_frame].tz;
+
+				double rx = trackletsVec[tracklet_id]->poses[poses_frame].rx;
+				double ry = trackletsVec[tracklet_id]->poses[poses_frame].ry;
+				double rz = trackletsVec[tracklet_id]->poses[poses_frame].rz;
+
+				double minX = 0 - (l / 2);
+				double minY = 0 - (w / 2);
+				double minZ = 0;
+
+				double maxX = (l / 2);
+				double maxY = (w / 2);
+				double maxZ = h;
+
+				PointCloudT::Ptr cloud_out(new PointCloudT);  // Out
+				pcl::CropBox<PointT> filter;
+				filter.setInputCloud(cloud_in);
+				filter.setMin(Eigen::Vector4f((float)minX, (float)minY, (float)minZ, 1.0));
+				filter.setMax(Eigen::Vector4f((float)maxX, (float)maxY, (float)maxZ, 1.0));
+				filter.setRotation(Eigen::Vector3f((float)rx, (float)ry, (float)rz));//rotation
+				filter.setTranslation(Eigen::Vector3f((float)tx, (float)ty, (float)tz));
+				
+				filter.filter(*cloud_out);
+
+				PointCloudT cloud_B;
+				cloud_B.points = cloud_out.get()->points;
+				cloud_B.height = cloud_out.get()->height;
+				cloud_B.width = cloud_out.get()->width;
+
+				char id_str[10];
+				sprintf(id_str, "%d", tracklet_id);
+				char poses_frame_str[10];
+				sprintf(poses_frame_str, "%d", poses_frame);
+				pcl::io::savePCDFileASCII(save_dir + "/" + filenum_str + "_" + trackletsVec[tracklet_id]->objectType + "_" + id_str + "_" + poses_frame_str + ".pcd", cloud_B);
+				std::cout << save_dir + "/" + filenum_str + "_" + trackletsVec[tracklet_id]->objectType + "_" + id_str + "_" + poses_frame_str + ".pcd created success" << std::endl;
+			}
+		}
+	}
 	return 0;
 }
